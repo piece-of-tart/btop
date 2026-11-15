@@ -584,7 +584,7 @@ namespace Runner {
 				}
 			#endif
 				//? MEM
-				if (v_contains(conf.boxes, "mem")) {
+				if (v_contains(conf.boxes, "mem") or Mem::summary_y > 0 or Swap::shown) {
 					try {
 						if (Global::debug) debug_timer("mem", collect_begin);
 
@@ -594,7 +594,11 @@ namespace Runner {
 						if (Global::debug) debug_timer("mem", draw_begin);
 
 						//? Draw box
-						if (not pause_output) output += Mem::draw(mem, conf.force_redraw, conf.no_update);
+						if (not pause_output) {
+							if (v_contains(conf.boxes, "mem")) output += Mem::draw(mem, conf.force_redraw, conf.no_update);
+							if (Mem::summary_y > 0) output += Mem::draw_summary(mem);
+							if (Swap::shown) output += Swap::draw(mem, conf.force_redraw, conf.no_update);
+						}
 
 						if (Global::debug) debug_timer("mem", draw_done);
 					}

@@ -202,6 +202,9 @@ namespace Config {
 									"#* Only disks matching the filter will be shown. Prepend exclude= to only show disks not matching the filter. Examples: disks_filter=\"/boot /home/user\", disks_filter=\"exclude=/boot /home/user\""},
 
 		{"mem_graphs", 			"#* Show graphs instead of meters for memory values."},
+		{"show_memory_summary", "#* Show RAM, disk usage and temperatures between the top CPU box and GPU boxes; show_swap adds a swap row."},
+		{"show_swap_activity", "#* On Linux, split the network area into compact network and swap IN/OUT graphs, major faults and PSI averages."},
+		{"memory_summary_disks", "#* Mountpoints to show below RAM, one per row, in order, separated by spaces. Example: \"/ /mnt/data\"."},
 
 		{"mem_below_net",		"#* Show mem box below net box instead of above."},
 
@@ -294,6 +297,7 @@ namespace Config {
 		{"clock_format", "%X"},
 		{"custom_cpu_name", ""},
 		{"disks_filter", ""},
+		{"memory_summary_disks", "/"},
 		{"io_graph_speeds", ""},
 		{"net_iface", ""},
 		{"base_10_bitrate", "Auto"},
@@ -338,6 +342,8 @@ namespace Config {
 		{"show_cpu_freq", true},
 		{"background_update", true},
 		{"mem_graphs", true},
+		{"show_memory_summary", true},
+		{"show_swap_activity", true},
 		{"mem_below_net", false},
 		{"zfs_arc_cached", true},
 		{"show_swap", true},

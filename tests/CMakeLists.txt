@@ -14,6 +14,9 @@ target_include_directories(libbtop_test PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(libbtop_test libbtop GTest::gtest_main)
 
 add_executable(btop_test cpu_names.cpp tools.cpp)
+if(LINUX)
+  target_sources(btop_test PRIVATE temperature_sensors.cpp memory_activity.cpp widget_layout.cpp)
+endif()
 target_link_libraries(btop_test libbtop_test)
 
 include(GoogleTest)

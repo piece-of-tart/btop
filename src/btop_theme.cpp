@@ -37,7 +37,6 @@ using namespace Tools;
 namespace fs = std::filesystem;
 
 string Term::fg, Term::bg;
-string Fx::reset = reset_base;
 
 namespace Theme {
 
@@ -83,6 +82,9 @@ namespace Theme {
 		{ "used_start", "#592b26" },
 		{ "used_mid", "#d9626d" },
 		{ "used_end", "#ff4769" },
+		{ "ssd_start", "#1e40af" },
+		{ "ssd_mid", "#3b82f6" },
+		{ "ssd_end", "#60a5fa" },
 		{ "download_start", "#291f75" },
 		{ "download_mid", "#4f43a3" },
 		{ "download_end", "#b0a9de" },
@@ -134,6 +136,9 @@ namespace Theme {
 		{ "used_start", "\x1b[31m" },
 		{ "used_mid", "" },
 		{ "used_end", "\x1b[91m" },
+		{ "ssd_start", "\x1b[34m" },
+		{ "ssd_mid", "" },
+		{ "ssd_end", "\x1b[94m" },
 		{ "download_start", "\x1b[34m" },
 		{ "download_mid", "" },
 		{ "download_end", "\x1b[94m" },

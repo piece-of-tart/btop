@@ -747,6 +747,15 @@ namespace Menu {
 				"True or False."},
 		},
 		{
+		#ifdef __linux__
+			{"show_swap_activity",
+				"Compact network and show swap activity below.",
+				"",
+				"IN/OUT graphs, used swap, major faults/s,",
+				"and PSI averages for CPU, memory and I/O.",
+				"",
+				"True or False."},
+		#endif
 			{"graph_symbol_net",
 				"Graph symbol to use for graphs in net box.",
 				"",

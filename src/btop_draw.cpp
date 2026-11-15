@@ -1003,12 +1003,12 @@ namespace Cpu {
 				}
 				if (show_temps and gpus[i].supported_functions.temp_info) {
 					const auto [temp, unit] = celsius_to(gpus[i].temp.back(), temp_scale);
+					const auto& temp_color = Theme::g("temp").at(clamp(gpus[i].temp.back() * 100 / max(1ll, gpus[i].temp_max), 0ll, 100ll));
 					out += ' ';
 					if (b_columns > 1)
-						out += Theme::c("inactive_fg") + graph_bg * 5 + Mv::l(5) + Theme::g("temp").at(clamp(gpus[i].temp.back() * 100 / gpus[i].temp_max, 0ll, 100ll))
+						out += Theme::c("inactive_fg") + graph_bg * 5 + Mv::l(5) + temp_color
 							+ gpu_temp_graphs[i](gpus[i].temp, data_same or redraw);
-					else out += Theme::g("temp").at(clamp(gpus[i].temp.back() * 100 / gpus[i].temp_max, 0ll, 100ll));
-					out += rjust(to_string(temp), 3) + Theme::c("main_fg") + unit;
+					out += temp_color + rjust(to_string(temp), 3) + unit + Theme::c("main_fg");
 				}
 				if (gpus[i].supported_functions.pwr_usage) {
 					out += ' ' + Theme::g("cached").at(clamp(safeVal(gpus[i].gpu_percent, "gpu-pwr-totals"s).back(), 0ll, 100ll))
@@ -1040,7 +1040,6 @@ namespace Gpu {
 	vector<int> shown_panels = {};
 	int graph_up_height;
 	vector<Draw::Graph> graph_upper_vec = {}, graph_lower_vec = {};
-	vector<Draw::Graph> temp_graph_vec = {};
 	vector<Draw::Graph> mem_used_graph_vec = {}, mem_util_graph_vec = {};
 	vector<Draw::Meter> gpu_meter_vec = {};
 	vector<Draw::Meter> pwr_meter_vec = {};
@@ -1057,7 +1056,6 @@ namespace Gpu {
 
 		auto& graph_upper = graph_upper_vec[index];
 		auto& graph_lower = graph_lower_vec[index];
-		auto& temp_graph = temp_graph_vec[index];
 		auto& mem_used_graph = mem_used_graph_vec[index];
 		auto& mem_util_graph = mem_util_graph_vec[index];
 		auto& gpu_meter = gpu_meter_vec[index];
@@ -1069,10 +1067,9 @@ namespace Gpu {
         auto tty_mode = Config::getB("tty_mode");
 		auto& temp_scale = Config::getS("temp_scale");
 		auto& graph_symbol = (tty_mode ? "tty" : Config::getS("graph_symbol_gpu"));
-		auto& graph_bg = Symbols::graph_symbols.at((graph_symbol == "default" ? Config::getS("graph_symbol") + "_up" : graph_symbol + "_up")).at(6);
         auto single_graph = !Config::getB("gpu_mirror_graph");
 		string out;
-		int height = gpu_b_height_offsets[index] + 4;
+		int height = gpu_b_height_offsets[shown_panels[index]] + 5;
 		out.reserve(width * height);
 
 		//* Redraw elements not needed to be updated every cycle
@@ -1093,10 +1090,8 @@ namespace Gpu {
                     	Config::getB("cpu_invert_lower"), true
                 	};
             	}
-				gpu_meter = Draw::Meter{b_width - (show_temps ? 25 : 12), "cpu"};
+				gpu_meter = Draw::Meter{b_width - 12, "cpu"};
 			}
-			if (gpu.supported_functions.temp_info)
-				temp_graph = Draw::Graph{6, 1, "temp", gpu.temp, graph_symbol, false, false, gpu.temp_max, -23};
 			if (gpu.supported_functions.pwr_usage)
 				pwr_meter = Draw::Meter{b_width - (gpu.supported_functions.pwr_state and gpu.pwr_state != 32 ? 25 : 12), "cached"};
 			if (gpu.supported_functions.mem_utilization)
@@ -1109,23 +1104,41 @@ namespace Gpu {
 
 
 		//* General GPU info
-		int rows_used = 1;
+		int rows_used = 2; // The first information row is reserved for temperatures.
+		auto thermal_row = [&](bool compact) {
+			string text;
+			auto add = [&](const string& label, std::optional<long long> value, long long limit, bool delta = false) {
+				if (not text.empty()) text += Theme::c("main_fg") + " | ";
+				text += Theme::c("main_fg") + label + (compact ? " " : ": ");
+				if (not show_temps or not value) { text += Theme::c("inactive_fg") + "N/A"; return; }
+				const auto [number, unit] = celsius_to(*value, temp_scale);
+				// A temperature difference has no Celsius/Fahrenheit zero-point offset.
+				const auto converted = delta ? ((temp_scale == "fahrenheit" or temp_scale == "rankine")
+					? static_cast<long long>(round(*value * 1.8)) : *value) : number;
+				text += Theme::g("temp").at(clamp(*value * 100 / max(1ll, limit), 0ll, 100ll)) + to_string(converted) + unit;
+			};
+			const auto edge = gpu.supported_functions.temp_info and not gpu.temp.empty()
+				? std::optional<long long>{gpu.temp.back()} : std::nullopt;
+			add("GPU", edge, gpu.temp_max);
+			add(compact ? "H" : "Hotspot", gpu.hotspot, gpu.hotspot_max);
+			add(compact ? "V" : "VRAM", gpu.memory_temp, gpu.memory_temp_max);
+			add(compact ? "Δ" : "ΔHotspot", gpu.hotspot and edge
+				? std::optional<long long>{*gpu.hotspot - *edge} : std::nullopt, 40, true);
+			return text + Theme::c("main_fg");
+		};
+		string temperatures = thermal_row(false);
+		if (ulen(Fx::uncolor(temperatures)) > static_cast<size_t>(b_width - 2)) temperatures = thermal_row(true);
+		out += Mv::to(b_y + 1, b_x + 1) + temperatures
+			+ string(max(0, b_width - 2 - static_cast<int>(ulen(Fx::uncolor(temperatures)))), ' ');
 		//? Gpu graph, meter & clock speed
 		if (gpu.supported_functions.gpu_utilization) {
-			out += Fx::ub + Mv::to(y + rows_used, x + 1) + graph_upper(safeVal(gpu.gpu_percent, "gpu-totals"s), (data_same or redraw[index]));
+			out += Fx::ub + Mv::to(y + 1, x + 1) + graph_upper(safeVal(gpu.gpu_percent, "gpu-totals"s), (data_same or redraw[index]));
 			if (not single_graph)
-				out += Mv::to(y + rows_used + graph_up_height, x + 1) + graph_lower(safeVal(gpu.gpu_percent, "gpu-totals"s), (data_same or redraw[index]));
+				out += Mv::to(y + 1 + graph_up_height, x + 1) + graph_lower(safeVal(gpu.gpu_percent, "gpu-totals"s), (data_same or redraw[index]));
 
 			out += Mv::to(b_y + rows_used, b_x + 1) + Theme::c("main_fg") + Fx::b + "GPU " + gpu_meter(safeVal(gpu.gpu_percent, "gpu-totals"s).back())
 				+ Theme::g("cpu").at(clamp(safeVal(gpu.gpu_percent, "gpu-totals"s).back(), 0ll, 100ll)) + rjust(to_string(safeVal(gpu.gpu_percent, "gpu-totals"s).back()), 5) + Theme::c("main_fg") + '%';
 
-			//? Temperature graph, I assume the device supports utilization if it supports temperature
-			if (show_temps) {
-				const auto [temp, unit] = celsius_to(gpu.temp.back(), temp_scale);
-				out += ' ' + Theme::c("inactive_fg") + graph_bg * 6 + Mv::l(6) + Theme::g("temp").at(clamp(gpu.temp.back() * 100 / gpu.temp_max, 0ll, 100ll))
-					+ temp_graph(gpu.temp, data_same or redraw[index]);
-				out += rjust(to_string(temp), 4) + Theme::c("main_fg") + unit;
-			}
 			out += Theme::c("div_line") + Symbols::v_line;
 			rows_used++;
 		}
@@ -1180,6 +1193,9 @@ namespace Gpu {
 						+  Mv::l(b_width/2-1) + Mv::u(1) + rjust(to_string(gpu.mem_utilization_percent.back()), 3) + '%';
 
 				//? Memory clock speed
+				if (not gpu.supported_functions.mem_utilization)
+					out += Mv::to(b_y + rows_used + 2, b_x + 1) + Theme::c("main_fg") + "Utilization: N/A";
+
 				if (gpu.supported_functions.mem_clock) {
 					string clock_speed_string = to_string(gpu.mem_clock_speed);
 					out += Mv::to(b_y + rows_used, b_x + b_width/2 - 11) + Theme::c("div_line") + Symbols::h_line*(5-clock_speed_string.size())
@@ -1202,9 +1218,9 @@ namespace Gpu {
 
 		//? PCIe link throughput
 		// Negative RX/TX means that they are manually disabled, not that they are unsupported
-		if (gpu.supported_functions.pcie_txrx and not (gpu.pcie_rx < 0 or gpu.pcie_tx < 0)) {
-			string tx_string = floating_humanizer(gpu.pcie_tx, 0, 1, 0, 1);
-			string rx_string = floating_humanizer(gpu.pcie_rx, 0, 1, 0, 1);
+		if (not gpu.supported_functions.pcie_txrx or not (gpu.pcie_rx < 0 or gpu.pcie_tx < 0)) {
+			string tx_string = gpu.supported_functions.pcie_txrx ? floating_humanizer(gpu.pcie_tx, 0, 1, 0, 1) : "N/A";
+			string rx_string = gpu.supported_functions.pcie_txrx ? floating_humanizer(gpu.pcie_rx, 0, 1, 0, 1) : "N/A";
 			out += Mv::to(b_y + height - 3, b_x+2) + Theme::c("div_line")
 				+ Symbols::title_left_down + Theme::c("title") + Fx::b + "TX:" + Fx::ub + Theme::c("div_line") + Symbols::title_right_down + Symbols::h_line*(b_width/2-9-tx_string.size())
 				+ Symbols::title_left_down + Theme::c("title") + Fx::b + tx_string + Fx::ub + Theme::c("div_line") + Symbols::title_right_down + (gpu.supported_functions.mem_total and gpu.supported_functions.mem_used ? Symbols::div_down : Symbols::h_line)
@@ -1221,6 +1237,7 @@ namespace Gpu {
 
 namespace Mem {
 	int width_p = 45, height_p = 40;
+	int summary_y = 0;
 	int min_width = 36, min_height = 10;
 	int x = 1, y, width = 20, height;
 	int mem_width, disks_width, divider, item_height, mem_size, mem_meter, graph_height, disk_meter;
@@ -1233,6 +1250,89 @@ namespace Mem {
 	std::unordered_map<string, Draw::Meter> disk_meters_used;
 	std::unordered_map<string, Draw::Meter> disk_meters_free;
 	std::unordered_map<string, Draw::Graph> io_graphs;
+
+	static auto summary_mounts() -> vector<string> {
+		auto mounts = ssplit(Config::getS("memory_summary_disks"));
+		if (mounts.empty()) mounts.push_back("/");
+		return mounts;
+	}
+
+	// Keep the visible width separate: ANSI colors must not affect meter sizing.
+	static auto temperature_text(const vector<temperature_info>& temperatures, int max_width, bool labels = false)
+		-> std::pair<string, int> {
+		if (not Config::getB("check_temp")) return {"", 0};
+		string out;
+		int width = 0;
+		for (const auto& sensor : temperatures) {
+			const auto [value, unit] = celsius_to(sensor.celsius, Config::getS("temp_scale"));
+			const string text = ' ' + (labels ? sensor.name + ' ' : "") + to_string(value) + unit;
+			const int size = static_cast<int>(ulen(text));
+			if (width + size > max_width) break;
+			out += Theme::g("temp").at(clamp(sensor.celsius * 100 / max(1ll, sensor.max), 0ll, 100ll)) + text;
+			width += size;
+		}
+		if (temperatures.empty() and max_width >= 9) return {Theme::c("inactive_fg") + " temp N/A" + Theme::c("main_fg"), 9};
+		return {out + Theme::c("main_fg"), width};
+	}
+
+	string draw_summary(const mem_info& mem) {
+		if (Runner::stopping or summary_y == 0) return "";
+		const auto mounts = summary_mounts();
+		const int row_width = Term::width - 2;
+
+		auto usage_cell = [](const string& label, uint64_t used, uint64_t total, int percent,
+							int width, const string& extra, const string& gradient,
+							const vector<temperature_info>& temperatures, bool show_temperature = true) {
+			percent = clamp(percent, 0, 100);
+			const string prefix = fmt::format(" {:<5} ", label + ':');
+			const auto [temps, temp_width] = show_temperature ? temperature_text(temperatures, max(0, width / 2 - 12), label == "RAM") : std::pair<string, int>{"", 0};
+			const int available = width - static_cast<int>(ulen(prefix)) - 1 - temp_width;
+			const int min_meter = max(5, width / 4);
+			const bool compact = width < 55;
+			string info = fmt::format("{} / {} ({}%)", floating_humanizer(used, compact),
+				floating_humanizer(total, compact), percent);
+			if (static_cast<int>(ulen(info)) + min_meter > available)
+				info = fmt::format("{}/{} {}%", floating_humanizer(used, true), floating_humanizer(total, true), percent);
+			if (static_cast<int>(ulen(info)) + min_meter > available)
+				info = fmt::format("{}%", percent);
+			if (static_cast<int>(ulen(info + extra)) + min_meter <= available) info += extra;
+			const int meter_width = max(1, available - static_cast<int>(ulen(info)));
+			return prefix + Draw::Meter{meter_width, gradient}(percent) + Theme::c("main_fg") + ' ' + info + temps;
+		};
+
+		const auto total = get_totalMem();
+		const auto used = mem.stats.at("used");
+		const int used_percent = total == 0 ? 0 : clamp<int>(used * 100 / total, 0, 100);
+		string out = Mv::to(summary_y, 1) + Fx::reset + Theme::c("mem_box") + Symbols::v_line
+			+ Theme::c("main_fg") + usage_cell("RAM", used, total, used_percent, row_width,
+				" available " + floating_humanizer(mem.stats.at("available")), "used", mem.temperatures)
+			+ Theme::c("mem_box") + Symbols::v_line;
+		if (Config::getB("show_swap")) {
+			const auto swap_total = mem.stats.at("swap_total");
+			const auto swap_used = mem.stats.at("swap_used");
+			const int percent = swap_total == 0 ? 0 : clamp<int>(swap_used * 100 / swap_total, 0, 100);
+			out += Mv::to(summary_y + 1, 1) + Theme::c("mem_box")
+				+ Symbols::v_line + Theme::c("main_fg");
+			if (swap_total > 0)
+				out += usage_cell("Swap", swap_used, swap_total, percent, row_width, "", "used", {}, false);
+			else out += ljust(" Swap: disabled", row_width);
+			out += Theme::c("mem_box") + Symbols::v_line;
+		}
+		for (size_t i = 0; i < mounts.size(); ++i) {
+			const auto& mount = mounts.at(i);
+			const string label = fmt::format("SSD{}", i + 1);
+			out += Mv::to(summary_y + static_cast<int>(i) + 1 + Config::getB("show_swap"), 1) + Theme::c("mem_box")
+				+ Symbols::v_line + Theme::c("main_fg");
+			if (auto disk = mem.disks.find(mount); disk != mem.disks.end() and disk->second.total > 0) {
+				const auto& d = disk->second;
+				out += usage_cell(label, d.used, d.total, d.used_percent, row_width,
+					fmt::format(" free {} ({})", floating_humanizer(d.free), mount), "ssd", d.temperatures);
+			}
+			else out += ljust(uresize(fmt::format(" {}: N/A ({})", label, mount), row_width), row_width);
+			out += Theme::c("mem_box") + Symbols::v_line;
+		}
+		return out + Fx::reset;
+	}
 
 	string draw(const mem_info& mem, bool force_redraw, bool data_same) {
 		if (Runner::stopping) return "";
@@ -1390,6 +1490,10 @@ namespace Mem {
 		}
 		if (graph_height > 0 and cy < height - 2)
 			out += Mv::to(y+1+cy, x+1+cx) + divider;
+		const auto [ram_temps, ram_temp_width] = temperature_text(mem.temperatures, width - 10, true);
+		if (ram_temp_width > 0)
+			out += Mv::to(y + height - 1, x + 2) + Theme::c("mem_box") + Symbols::title_left
+				+ Theme::c("title") + "RAM" + ram_temps + Theme::c("mem_box") + Symbols::title_right;
 
 		//? Disks
 		if (show_disks) {
@@ -1398,6 +1502,17 @@ namespace Mem {
 			bool big_disk = disks_width >= 25;
 			divider = Mv::l(1) + Theme::c("div_line") + Symbols::div_left + Symbols::h_line * disks_width + Theme::c("mem_box") + Fx::ub + Symbols::div_right + Mv::l(disks_width);
 			const string hu_div = Theme::c("div_line") + Symbols::h_line + Theme::c("main_fg");
+			auto disk_header = [&](const disk_info& disk, const string& total, const string& io) {
+				const auto [temps, temp_width] = disk.temperatures.empty() ? std::pair<string, int>{"", 0}
+					: temperature_text(disk.temperatures, max(0, disks_width - static_cast<int>(total.size()) - 7));
+				const string name = uresize(disk.name, max(1, disks_width - static_cast<int>(total.size()) - temp_width - 2));
+				string header = Mv::to(y+1+cy, x+1+cx) + divider + Theme::c("title") + Fx::b + name + temps;
+				const int gap = disks_width - static_cast<int>(total.size() + ulen(name)) - temp_width - 2;
+				if (big_disk and not io.empty() and gap >= static_cast<int>(ulen(io)) + 2)
+					header += hu_div + io + hu_div;
+				return header + Mv::to(y+1+cy, x+cx + disks_width - total.size()) + Theme::c("title")
+					+ trans(total) + Fx::ub + Theme::c("main_fg");
+			};
 			if (io_mode) {
 				for (const auto& mount : mem.disks_order) {
 					if (not disks.contains(mount)) continue;
@@ -1405,12 +1520,7 @@ namespace Mem {
 					const auto disk = safeVal(disks, mount);
 					if (disk.io_read.empty()) continue;
 					const string total = floating_humanizer(disk.total, not big_disk);
-					out += Mv::to(y+1+cy, x+1+cx) + divider + Theme::c("title") + Fx::b + uresize(disk.name, disks_width - 8) + Mv::to(y+1+cy, x+cx + disks_width - total.size())
-						+ trans(total) + Fx::ub;
-					if (big_disk) {
-						const string used_percent = to_string(disk.used_percent);
-						out += Mv::to(y+1+cy, x+1+cx + round((double)disks_width / 2) - round((double)used_percent.size() / 2) - 1) + hu_div + used_percent + '%' + hu_div;
-					}
+					out += disk_header(disk, total, to_string(disk.used_percent) + '%');
 					if (io_graphs.contains(mount + "_activity")) {
 					out += Mv::to(y+2+cy++, x+1+cx) + (big_disk ? " IO% " : " IO   " + Mv::l(2)) + Theme::c("inactive_fg") + graph_bg * (disks_width - 6)
 						+ Mv::l(disks_width - 6) + io_graphs.at(mount + "_activity")(disk.io_activity, redraw or data_same) + Theme::c("main_fg");
@@ -1451,10 +1561,7 @@ namespace Mem {
 					const string human_used = floating_humanizer(disk.used, not big_disk);
 					const string human_free = floating_humanizer(disk.free, not big_disk);
 
-					out += Mv::to(y+1+cy, x+1+cx) + divider + Theme::c("title") + Fx::b + uresize(disk.name, disks_width - 8) + Mv::to(y+1+cy, x+cx + disks_width - human_total.size())
-						+ trans(human_total) + Fx::ub + Theme::c("main_fg");
-					if (big_disk and not human_io.empty())
-						out += Mv::to(y+1+cy, x+1+cx + round((double)disks_width / 2) - round((double)human_io.size() / 2) - 1) + hu_div + human_io + hu_div;
+					out += disk_header(disk, human_total, human_io);
 					if (++cy > height - 3) break;
 					if (show_io_stat and io_graphs.contains(mount + "_activity")) {
 						out += Mv::to(y+1+cy, x+1+cx) + (big_disk ? " IO% " : " IO   " + Mv::l(2)) + Theme::c("inactive_fg") + graph_bg * (disks_width - 6) + Theme::g("available").at(clamp(disk.io_activity.back(), 50ll, 100ll))
@@ -1483,6 +1590,68 @@ namespace Mem {
 		return out + Fx::reset;
 	}
 
+}
+
+namespace Swap {
+	int x = 1, y = 1, width = 0, height = 0, min_height = 10;
+	bool shown = false;
+	string box;
+
+	string draw(const Mem::mem_info& mem, bool force_redraw, bool data_same) {
+		if (not shown or Runner::stopping) return "";
+		static Draw::Graph in_graph, out_graph;
+		static int old_width = 0, old_height = 0;
+		static long long old_in_max = 0, old_out_max = 0;
+		const int inner_width = width - 2;
+		const int label_width = 13;
+		const int graph_width = max(1, inner_width - label_width);
+		const int graph_height = max(1, (height - 8) / 2);
+		const auto& activity = mem.activity;
+		const auto in_max = max(1ll << 20, *rng::max_element(activity.swap_in));
+		const auto out_max = max(1ll << 20, *rng::max_element(activity.swap_out));
+		const bool rebuild = force_redraw or old_width != width or old_height != height
+			or old_in_max != in_max or old_out_max != out_max;
+		if (rebuild) {
+			const auto& symbol = Config::getB("tty_mode") ? "tty" : Config::getS("graph_symbol_mem");
+			in_graph = Draw::Graph{graph_width, graph_height, "download", activity.swap_in, symbol, false, true, in_max};
+			out_graph = Draw::Graph{graph_width, graph_height, "upload", activity.swap_out, symbol, false, true, out_max};
+			old_width = width; old_height = height; old_in_max = in_max; old_out_max = out_max;
+		}
+		string out = box;
+		auto put = [&](int row, const string& text) {
+			out += Mv::to(y + row, x + 1) + Theme::c("main_fg") + text
+				+ string(max(0, inner_width - static_cast<int>(ulen(Fx::uncolor(text)))), ' ');
+		};
+		const auto total = mem.stats.at("swap_total"), used = mem.stats.at("swap_used");
+		const int percent = total == 0 ? 0 : clamp<int>(used * 100 / total, 0, 100);
+		put(1, total == 0 ? "Swap disabled" : fmt::format("Used: {} / {} ({}%)",
+			floating_humanizer(used, width < 45), floating_humanizer(total, width < 45), percent));
+		auto rate_label = [&](const string& label, long long value) {
+			return ljust(label + ' ' + (activity.available ? floating_humanizer(value, true, 0, false, true) : "N/A"), label_width);
+		};
+		out += Mv::to(y + 2, x + 1) + Theme::c("main_fg") + rate_label("IN", activity.swap_in.back())
+			+ Mv::to(y + 2, x + 1 + label_width) + in_graph(activity.swap_in, rebuild or data_same);
+		out += Mv::to(y + 2 + graph_height, x + 1) + Theme::c("main_fg") + rate_label("OUT", activity.swap_out.back())
+			+ Mv::to(y + 2 + graph_height, x + 1 + label_width) + out_graph(activity.swap_out, rebuild or data_same);
+		const int stats_y = 2 + 2 * graph_height;
+		put(stats_y, "Major faults: " + (activity.available ? fmt::format("{:.1f}/s", activity.major_faults) : "N/A"));
+		put(stats_y + 1, fmt::format("PSI%{:>5} {:>5} {:>5} F10s", "10s", "60s", "300s"));
+		auto pressure_number = [](double value) {
+			return Theme::g("temp").at(clamp(static_cast<int>(round(value * 5)), 0, 100))
+				+ fmt::format("{:5.1f}", value) + Theme::c("main_fg");
+		};
+		for (size_t i = 0; const auto* label : {"CPU ", "MEM ", "IO  "}) {
+			const auto& pressure = mem.pressure[i];
+			string line = label;
+			if (not pressure.available) line += Theme::c("inactive_fg") + "N/A";
+			else {
+				for (const auto value : pressure.some) line += pressure_number(value) + ' ';
+				if (i > 0 and pressure.full_available) line += "F" + pressure_number(pressure.full[0]);
+			}
+			put(stats_y + 2 + static_cast<int>(i++), line);
+		}
+		return out + Fx::reset;
+	}
 }
 
 namespace Net {
@@ -2256,6 +2425,9 @@ namespace Draw {
 		Cpu::box.clear();
 
 		Mem::box.clear();
+		Swap::box.clear();
+		Swap::shown = false;
+		Swap::width = Swap::height = 0;
 		Net::box.clear();
 		Proc::box.clear();
 		Global::clock.clear();
@@ -2277,6 +2449,7 @@ namespace Draw {
 		Cpu::redraw = Mem::redraw = Net::redraw = Proc::redraw = true;
 
 		Cpu::shown = boxes.contains("cpu");
+		Mem::summary_y = 0;
 	#ifdef GPU_SUPPORT
 		Gpu::box.clear();
 		Gpu::width = 0;
@@ -2290,16 +2463,22 @@ namespace Draw {
 			}
 		}
 		Gpu::shown = Gpu::shown_panels.size();
+		const int summary_height = Config::getB("show_memory_summary") and Cpu::shown
+			and not cpu_bottom and Gpu::shown > 0 ? 1 + static_cast<int>(Mem::summary_mounts().size()) + Config::getB("show_swap") : 0;
 
 		// Calculate the minimum possible GPU height, store in total_height
 		// The actual total_height value will of course be overwritten later
-		Gpu::total_height = 0;
+		Gpu::total_height = summary_height;
 		for (int i = 0; i < Gpu::shown; i++) {
 			using namespace Gpu;
-			total_height += 4 + gpu_b_height_offsets[shown_panels[i]];
+			total_height += 5 + gpu_b_height_offsets[shown_panels[i]];
 		}
 	#endif
 		Mem::shown = boxes.contains("mem");
+	#ifdef GPU_SUPPORT
+		// The collector uses width to retain memory/swap history even without a full mem box.
+		if (summary_height and not Mem::shown) Mem::width = Term::width;
+	#endif
 		Net::shown = boxes.contains("net");
 		Proc::shown = boxes.contains("proc");
 
@@ -2380,18 +2559,19 @@ namespace Draw {
 		//* Calculate and draw gpu box outlines
 		if (Gpu::shown != 0) {
 			using namespace Gpu;
+			Mem::summary_y = summary_height ? Cpu::height + 1 : 0;
 			x_vec.resize(shown); y_vec.resize(shown);
 			b_x_vec.resize(shown); b_y_vec.resize(shown);
 			b_height_vec.resize(shown);
 			box.resize(shown);
 			graph_upper_vec.resize(shown); graph_lower_vec.resize(shown);
-			temp_graph_vec.resize(shown);
 			mem_used_graph_vec.resize(shown); mem_util_graph_vec.resize(shown);
 			gpu_meter_vec.resize(shown);
 			pwr_meter_vec.resize(shown);
 			enc_meter_vec.resize(shown);
 			redraw.resize(shown);
-			total_height = 0;
+			// Reserve separate RAM and disk rows above the first GPU along with the GPU stack.
+			total_height = summary_height;
 			for (auto i = 0; i < shown; ++i) {
 				redraw[i] = true;
 				int height = 0;
@@ -2406,12 +2586,12 @@ namespace Draw {
 					else
 						height = max(min_height, (int)ceil((double)Term::height * height_p/Gpu::shown / 100));
 
-				b_height_vec[i] = gpu_b_height_offsets[shown_panels[i]] + 2;
+				b_height_vec[i] = gpu_b_height_offsets[shown_panels[i]] + 3;
 				height += (height+Cpu::height == Term::height-1);
 				height = max(height, b_height_vec[i] + 2);
 				x_vec[i] = 1; y_vec[i] = 1 + total_height + (not Config::getB("cpu_bottom"))*Cpu::shown*Cpu::height;
 				box[i] = createBox(x_vec[i], y_vec[i], width, height, Theme::c("cpu_box"), true, std::string("gpu") + (char)(shown_panels[i]+'0'), "", (shown_panels[i]+5)%10); // TODO gpu_box
-				b_width = clamp(width/2, min_width, 65);
+				b_width = clamp(width/2, min_width, 72);
 				total_height += height;
 
 				//? Main statistics box
@@ -2515,6 +2695,17 @@ namespace Draw {
 				y = Term::height - height + 1 - (cpu_bottom ? Cpu::height : 0);
 
 			b_width = (width > 45) ? 27 : 19;
+		#ifdef __linux__
+			if (Config::getB("show_swap_activity") and height >= min_height + Swap::min_height) {
+				const int available_height = height;
+				height = clamp(available_height - Swap::min_height, min_height, 8);
+				Swap::shown = true;
+				Swap::x = x; Swap::y = y + height;
+				Swap::width = width; Swap::height = available_height - height;
+				Swap::box = createBox(Swap::x, Swap::y, Swap::width, Swap::height,
+					Theme::c("mem_box"), true, "swap", "");
+			}
+		#endif
 			b_height = (height > 10) ? 9 : height - 2;
 			b_x = x + width - b_width - 1;
 			b_y = y + ((height - 2) / 2) - b_height / 2 + 1;

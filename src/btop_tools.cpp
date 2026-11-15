@@ -137,11 +137,16 @@ namespace Term {
 	#endif
 
 		int height = (cpu ? Cpu::min_height : 0);
-		if (proc) height += Proc::min_height;
-		else height += (mem ? Mem::min_height : 0) + (net ? Net::min_height : 0);
+		int left_height = (mem ? Mem::min_height : 0) + (net ? Net::min_height : 0);
+	#ifdef __linux__
+		if (net and Config::getB("show_swap_activity")) left_height += Swap::min_height;
+	#endif
+		height += proc ? std::max(Proc::min_height, left_height) : left_height;
 	#ifdef GPU_SUPPORT
 		for (int i = 0; i < gpu; i++)
-			height += Gpu::gpu_b_height_offsets[i] + 4;
+			height += Gpu::gpu_b_height_offsets[i] + 5;
+		if (cpu and gpu > 0 and not Config::getB("cpu_bottom") and Config::getB("show_memory_summary"))
+			height += 1 + std::max(1, static_cast<int>(Tools::ssplit(Config::getS("memory_summary_disks")).size())) + Config::getB("show_swap");
 	#endif
 
 		return { width, height };
@@ -734,6 +739,8 @@ const string Fx::us = e + "29m";	//* Strike/crossed-out on/off
 
 //* Reset foreground/background color and text effects
 const string Fx::reset_base = e + "0m";
+// Initialize after reset_base in the same translation unit, independent of link order.
+string Fx::reset = reset_base;
 
 //* Regex for matching color, style and cursor move escape sequences
 const std::regex Fx::escape_regex("\033\\[\\d+;?\\d?;?\\d*;?\\d*;?\\d*(m|f|s|u|C|D|A|B){1}");

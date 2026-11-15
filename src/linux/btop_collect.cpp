@@ -55,6 +55,8 @@ tab-size = 4
 #include "../btop_log.hpp"
 #include "../btop_shared.hpp"
 #include "../btop_tools.hpp"
+#include "temperature_sensors.hpp"
+#include "memory_activity.hpp"
 
 #if defined(GPU_SUPPORT)
 	// Redefining C++ keywords fortunately has a warning in clang, however it's unavoidable here
@@ -240,9 +242,12 @@ namespace Gpu {
 		#define RSMI_MEM_TYPE_VRAM            0
 		#define RSMI_TEMP_CURRENT             0
 		#define RSMI_TEMP_TYPE_EDGE           0
+		#define RSMI_TEMP_TYPE_JUNCTION       1
+		#define RSMI_TEMP_TYPE_MEMORY         2
 		#define RSMI_CLK_TYPE_MEM             4
 		#define RSMI_CLK_TYPE_SYS             0
 		#define RSMI_TEMP_MAX                 1
+		#define RSMI_TEMP_CRITICAL            5
 
 		typedef int rsmi_status_t,
 					rsmi_temperature_metric_t,
@@ -266,6 +271,7 @@ namespace Gpu {
 		rsmi_status_t (*rsmi_dev_gpu_clk_freq_get_v5)(uint32_t, rsmi_clk_type_t, rsmi_frequencies_t_v5*);
 		rsmi_status_t (*rsmi_dev_gpu_clk_freq_get_v6)(uint32_t, rsmi_clk_type_t, rsmi_frequencies_t_v6*);
 		rsmi_status_t (*rsmi_dev_power_ave_get)(uint32_t, uint32_t, uint64_t*);
+		rsmi_status_t (*rsmi_dev_current_socket_power_get)(uint32_t, uint64_t*) = nullptr;
 		rsmi_status_t (*rsmi_dev_memory_total_get)(uint32_t, rsmi_memory_type_t, uint64_t*);
 		rsmi_status_t (*rsmi_dev_memory_usage_get)(uint32_t, rsmi_memory_type_t, uint64_t*);
 		rsmi_status_t (*rsmi_dev_pci_throughput_get)(uint32_t, uint64_t*, uint64_t*, uint64_t*);
@@ -1489,6 +1495,8 @@ namespace Gpu {
 
 				// nvTimer.stop_rename_reset("Nv mem");
 				//? Memory info
+
+				//? Memory info
 				if (gpus_slice[i].supported_functions.mem_total) {
 					nvmlMemory_t memory;
 					result = nvmlDeviceGetMemoryInfo(devices[i], &memory);
@@ -1607,6 +1615,10 @@ namespace Gpu {
 		    LOAD_SYM(rsmi_dev_busy_percent_get);
 		    LOAD_SYM(rsmi_dev_memory_busy_percent_get);
 		    LOAD_SYM(rsmi_dev_power_ave_get);
+			// Optional: APUs may expose instantaneous power without an average sensor.
+			rsmi_dev_current_socket_power_get = reinterpret_cast<decltype(rsmi_dev_current_socket_power_get)>(
+				dlsym(rsmi_dl_handle, "rsmi_dev_current_socket_power_get"));
+			(void)dlerror();
 		    LOAD_SYM(rsmi_dev_memory_total_get);
 		    LOAD_SYM(rsmi_dev_memory_usage_get);
 		    LOAD_SYM(rsmi_dev_pci_throughput_get);
@@ -1716,10 +1728,13 @@ namespace Gpu {
 
 					//? Get temp_max
 					int64_t temp_max;
-    				result = rsmi_dev_temp_metric_get(i, RSMI_TEMP_TYPE_EDGE, RSMI_TEMP_MAX, &temp_max);
+					result = rsmi_dev_temp_metric_get(i, RSMI_TEMP_TYPE_EDGE, RSMI_TEMP_CRITICAL, &temp_max);
+					if (result != RSMI_STATUS_SUCCESS)
+						result = rsmi_dev_temp_metric_get(i, RSMI_TEMP_TYPE_EDGE, RSMI_TEMP_MAX, &temp_max);
         			if (result != RSMI_STATUS_SUCCESS)
     					Logger::warning("ROCm SMI: Failed to get maximum GPU temperature, defaulting to 110°C");
-    				else gpus_slice[i].temp_max = (long long)temp_max;
+					else if (temp_max >= 1000 and temp_max <= 200000)
+						gpus_slice[i].temp_max = temp_max / 1000; // ROCm reports milli-degrees Celsius.
 
 					//? Disable encoder and decoder utilisation on AMD
 					gpus_slice[i].supported_functions.encoder_utilization = false;
@@ -1838,6 +1853,10 @@ namespace Gpu {
 				if (gpus_slice[i].supported_functions.pwr_usage) {
     				uint64_t power;
     				result = rsmi_dev_power_ave_get(i, 0, &power);
+				#if !defined(RSMI_STATIC)
+					if (result != RSMI_STATUS_SUCCESS and rsmi_dev_current_socket_power_get != nullptr)
+						result = rsmi_dev_current_socket_power_get(i, &power);
+				#endif
     				if (result != RSMI_STATUS_SUCCESS) {
 						Logger::warning("ROCm SMI: Failed to get GPU power usage");
 						if constexpr(is_init) gpus_slice[i].supported_functions.pwr_usage = false;
@@ -1861,6 +1880,22 @@ namespace Gpu {
 							if constexpr(is_init) gpus_slice[i].supported_functions.temp_info = false;
     					} else gpus_slice[i].temp.push_back((long long)temp/1000);
     				}
+				}
+
+				//? Hotspot and VRAM temperatures, when exposed by ROCm.
+				if (Config::getB("check_temp") or is_init) {
+					for (const auto& [sensor, value, limit] : {
+						std::tuple{RSMI_TEMP_TYPE_JUNCTION, &gpus_slice[i].hotspot, &gpus_slice[i].hotspot_max},
+						std::tuple{RSMI_TEMP_TYPE_MEMORY, &gpus_slice[i].memory_temp, &gpus_slice[i].memory_temp_max}}) {
+						int64_t temp;
+						value->reset();
+						if (rsmi_dev_temp_metric_get(i, sensor, RSMI_TEMP_CURRENT, &temp) == RSMI_STATUS_SUCCESS
+							and temp >= -40000 and temp <= 200000) *value = temp / 1000;
+						if constexpr (is_init) {
+							if (rsmi_dev_temp_metric_get(i, sensor, RSMI_TEMP_CRITICAL, &temp) == RSMI_STATUS_SUCCESS
+								and temp >= 1000 and temp <= 200000) *limit = temp / 1000;
+						}
+					}
 				}
 
 				//? Memory info
@@ -2180,6 +2215,7 @@ namespace Gpu {
 				if (d.has_temp) {
 					gpu.temp.push_back(read_ll(d.hwmon / "temp1_input") / 1000); //? millidegrees → degrees
 				}
+				if (Config::getB("check_temp") or is_init) Hwmon::collect_gpu(gpu, d.hwmon);
 
 				if (not d.power.empty()) {
 					gpu.pwr_usage = read_ll(d.power) / 1000; //? microwatts → milliwatts
@@ -2334,7 +2370,7 @@ namespace Mem {
 		if (Runner::stopping or (no_update and not current_mem.percent.at("used").empty())) return current_mem;
 		auto show_swap = Config::getB("show_swap");
 		auto swap_disk = Config::getB("swap_disk");
-		auto show_disks = Config::getB("show_disks");
+		auto show_disks = Config::getB("show_disks") or summary_y > 0;
 		auto zfs_arc_cached = Config::getB("zfs_arc_cached");
 		auto totalMem = get_totalMem();
 		auto& mem = current_mem;
@@ -2376,7 +2412,7 @@ namespace Mem {
 				else if (label == "Cached:") {
 					meminfo >> mem.stats.at("cached");
 					mem.stats.at("cached") <<= 10;
-					if (not show_swap and not swap_disk) break;
+					if (not show_swap and not swap_disk and not Swap::shown) break;
 				}
 				else if (label == "SwapTotal:") {
 					meminfo >> mem.stats.at("swap_total");
@@ -2411,7 +2447,7 @@ namespace Mem {
 			while (cmp_greater(mem.percent.at(name).size(), width * 2)) mem.percent.at(name).pop_front();
 		}
 
-		if (show_swap and mem.stats.at("swap_total") > 0) {
+		if ((show_swap or swap_disk) and mem.stats.at("swap_total") > 0) {
 			for (const auto& name : swap_names) {
 				mem.percent.at(name).push_back(round((double)mem.stats.at(name) * 100 / mem.stats.at("swap_total")));
 				while (cmp_greater(mem.percent.at(name).size(), width * 2)) mem.percent.at(name).pop_front();
@@ -2753,6 +2789,10 @@ namespace Mem {
 			}
 		}
 
+		Hwmon::collect(mem);
+		static MemoryActivity::Collector activity_collector;
+		activity_collector.collect(mem, Shared::procPath, uptime_micros(), sysconf(_SC_PAGESIZE),
+			std::max(1, std::max(width, Swap::width)) * 2);
 		return mem;
 	}
 

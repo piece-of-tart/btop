@@ -163,6 +163,8 @@ namespace Gpu {
 
 		deque<long long> temp = {0};
 		long long temp_max = 110;
+		std::optional<long long> hotspot, memory_temp;
+		long long hotspot_max = 110, memory_temp_max = 100;
 
 		long long mem_total = 0;
 		long long mem_used = 0;
@@ -264,11 +266,18 @@ namespace Cpu {
 
 namespace Mem {
 	extern string box;
+	extern int summary_y;
 	extern int x, y, width, height, min_width, min_height;
 	extern bool has_swap, shown, redraw;
 	const array mem_names { "used"s, "available"s, "cached"s, "free"s };
 	const array swap_names { "swap_used"s, "swap_free"s };
 	extern int disk_ios;
+
+	struct temperature_info {
+		string name;
+		long long celsius{};
+		long long max = 85;
+	};
 
 	struct disk_info {
 		std::filesystem::path dev;
@@ -285,9 +294,19 @@ namespace Mem {
 		deque<long long> io_read = {};
 		deque<long long> io_write = {};
 		deque<long long> io_activity = {};
+		vector<temperature_info> temperatures = {};
 	};
 
 	struct mem_info {
+		struct pressure_info {
+			bool available = false, full_available = false;
+			array<double, 3> some{}, full{};
+		};
+		struct activity_info {
+			bool available = false;
+			deque<long long> swap_in{0}, swap_out{0}; // Bytes/second, sampled on a monotonic clock.
+			double major_faults = 0; // Faults/second, including file-backed page faults.
+		};
 		std::unordered_map<string, uint64_t> stats =
 			{{"used", 0}, {"available", 0}, {"cached", 0}, {"free", 0},
 			{"swap_total", 0}, {"swap_used", 0}, {"swap_free", 0}};
@@ -296,6 +315,9 @@ namespace Mem {
 			{"swap_total", {}}, {"swap_used", {}}, {"swap_free", {}}};
 		std::unordered_map<string, disk_info> disks;
 		vector<string> disks_order;
+		vector<temperature_info> temperatures;
+		array<pressure_info, 3> pressure; // CPU, memory, I/O; averages over 10/60/300 seconds.
+		activity_info activity;
 	};
 
 	//?* Get total system memory
@@ -306,7 +328,15 @@ namespace Mem {
 
 	//* Draw contents of mem box using <mem> as source
 	string draw(const mem_info& mem, bool force_redraw = false, bool data_same = false);
+	string draw_summary(const mem_info& mem);
 
+}
+
+namespace Swap {
+	extern int x, y, width, height, min_height;
+	extern bool shown;
+	extern string box;
+	string draw(const Mem::mem_info& mem, bool force_redraw = false, bool data_same = false);
 }
 
 namespace Net {
